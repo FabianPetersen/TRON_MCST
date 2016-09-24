@@ -5,15 +5,17 @@
 #include <unordered_set>
 #include <math.h>
 #include <chrono>
+#include <string>
 
 using namespace std;
 
 // Maximum allowed duration
 chrono::milliseconds max_duration = chrono::milliseconds(95);
+random_device rseed;
+mt19937 rgen(rseed()); // mersenne_twister
+
 
 int randomIntRange(int min, int max){
-    random_device rseed;
-    mt19937 rgen(rseed()); // mersenne_twister
     uniform_int_distribution<int> idist(min, max);
     return idist(rgen);
 }
@@ -143,7 +145,8 @@ class Player{
         vector<Point*> possibleMoves = board.validNeighbors(position->getX(), position->getY());
 
         if( !possibleMoves.empty()  ){
-            return possibleMoves.at((unsigned int) randomIntRange(0, possibleMoves.size() - 1));
+            int randomPos = (unsigned int) randomIntRange(1, possibleMoves.size()) - 1;
+            return possibleMoves.at(randomPos);
         }else{
             // If the enemy cant return a valid choice it has lost
             return nullptr;
@@ -162,7 +165,7 @@ class ActionTree {
     Point* move;
     vector<ActionTree*> children;
     ActionTree* parent = nullptr;
-    int wins = 0, plays = 0;
+    float wins = 0, plays = 0;
     bool winningMove;
 
     ActionTree(Point* _move, ActionTree* _parent){
@@ -198,7 +201,7 @@ class ActionTree {
             winPercentage = wins / plays;
 
             if( parent != nullptr ){
-                exploration = biasParameter * sqrt( (log(parent->plays / plays)) );
+                exploration = biasParameter * sqrt( (log(parent->plays) / plays) );
             }
         }
         return winPercentage + exploration;
@@ -239,16 +242,22 @@ class ActionTree {
 
         return bestChild;
     }
-
-
-
-
 };
 
 class MCTS {
     ActionTree* rootNode;
 
-    bool playSimulation(Board board, vector<Player> enemies, Player player){
+    bool simulateMove(Point* move, Board board, vector<Player> enemies, Player player){
+        if( board.isBlocked(move) ){
+            return false;
+        }else{
+            board.setBlocked(move);
+            player.position = move;
+            return playSimulation(board, enemies, player);
+        }
+    }
+
+    bool playSimulation(Board& board, vector<Player> enemies, Player player){
         // Run until we are the only one standing
         while( !enemies.empty() ){
             // The enemies makes the first move
@@ -288,13 +297,9 @@ class MCTS {
 
 
         auto begin = std::chrono::steady_clock::now();
-        int timediff =  int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());
-
-
-
-        //RESETLOOP:while ( int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < 95 ) {
-        int count = 0;
-        RESETLOOP:while ( count++ < 1500) {
+        RESETLOOP:while ( int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < 95 ) {
+        //int count = 0;
+        //RESETLOOP:while ( count++ < 1500) {
             // Start from the rootnode
             ActionTree* currentNode = rootNode;
             Board currentBoard = Board(board);
@@ -316,23 +321,25 @@ class MCTS {
                 }
 
                 // The node has not been visited before, get neighbors as children
-                if( currentNode->plays == 0 ){
-
+                if( currentNode->plays < 2 ){
                     vector<ActionTree*> children = {};
                     // Loop through and add children
                     for(Point* p: currentBoard.getNeighbors(currentNode->move->getX(), currentNode->move->getY())){
-                        children.push_back(new ActionTree(p, currentNode));
+                        ActionTree* childAction = new ActionTree(p, currentNode);
+
+                        // check if this is a valid move
+                        if( simulateMove(p, currentBoard, enemies, player) ){
+                            childAction->win();
+                        }else {
+                            childAction->loss();
+                        }
+
+                        // We need to add a simulation for each child
+                        children.push_back(childAction);
                     }
 
                     // Add the children to the node
                     currentNode->children = children;
-
-                    // First time visiting node, play a simulation
-                    if( playSimulation(currentBoard, currentEnemies, currentPlayer) ){
-                        currentNode->win();
-                    }else{
-                        currentNode->loss();
-                    }
 
                     // Start again from rootnode
                     goto RESETLOOP;
@@ -356,20 +363,78 @@ class MCTS {
 
         // We cant do anything, do something just to end the turn
         if ( bestChild == nullptr){
-            return board.getPoint(0, 0);
+            return new Point(-1, -1);
         }else{
             return bestChild->move;
         }
 
     };
-
-
-
 };
 
+string getDirection(Point* origin, Point* destination){
+    if( origin->getX() == destination->getX() ){
+        if( origin->getY() > destination->getY() ){
+            return "UP";
+        }else{
+            return "DOWN";
+        }
+    }else{
+        if( origin->getX() > destination->getX() ){
+            return "LEFT";
+        }else{
+            return "RIGHT";
+        }
+    }
+}
 
 
-int main() {
+void gameLoop(Board& board, MCTS mcts){
+    vector<Player> enemies;
+    Player player;
+
+    // game loop
+    while (1) {
+        int N; // total number of players (2 to 4).
+        int P; // your player number (0 to 3).
+        cin >> N >> P; cin.ignore();
+        for (int i = 0; i < N; i++) {
+            int X0; // starting X coordinate of lightcycle (or -1)
+            int Y0; // starting Y coordinate of lightcycle (or -1)
+
+            int X1; // starting X coordinate of lightcycle (can be the same as X0 if you play before this player)
+            int Y1; // starting Y coordinate of lightcycle (can be the same as Y0 if you play before this player)
+
+            cin >> X0 >> Y0 >> X1 >> Y1; cin.ignore();
+
+            // This player is me
+            if(i == P && enemies.size() != N){
+                player = Player(board.getPoint(X1, Y1));
+            }else if( i == P ){
+                player.position = board.getPoint(X1, Y1);
+            }else{
+                if (enemies.size() != N){
+                    enemies.push_back(Player(board.getPoint(X1, Y1)));
+                }else {
+                    enemies.at(i).position = board.getPoint(X1, Y1);
+                }
+            }
+            board.setBlocked(board.getPoint(X1, Y1));
+        }
+
+        // Write an action using cout. DON'T FORGET THE "<< endl"
+        // To debug: cerr << "Debug messages..." << endl;
+        Point* result = mcts.getBestChoice(board, enemies, player);
+
+        // IF no valid path exists
+        if( result->getX() == -1 ){
+            cout << "LEFT" << endl;
+        }else{
+            cout << getDirection(player.position, result) << endl;
+        }
+    }
+}
+
+void init(){
     for(int x = 0; x < width; x++){
         vector<Point*> yVector;
         for(int y = 0; y < height; y++){
@@ -378,10 +443,27 @@ int main() {
         }
         points.push_back(yVector);
     }
+}
 
+
+int main() {
+    init();
 
     MCTS mcts = MCTS();
     Board board = Board();
+
+
+    gameLoop(board, mcts);
+
+
+
+
+
+
+
+
+
+    /*
 
     Player enemy =  Player(board.getPoint(10, 10));
     vector<Player> enemies = { enemy };
@@ -390,11 +472,9 @@ int main() {
     board.setBlocked(player.position);
     board.setBlocked(enemy.position);
 
-
-
-
     Point* result = mcts.getBestChoice(board, enemies, player);
     cout << "The best move is: (" << result->getX() << ", " << result->getY() << ")" << std::endl;
-
+    cout << "Direction: " << getDirection(player.position, result) << " FROM (" << player.position->getX() << ", " << player.position->getY() << ") TO (" << result->getX() << ", " << result->getY() << ")" << std::endl;
+    */
     return 0;
 }
