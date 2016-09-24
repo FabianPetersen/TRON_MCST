@@ -8,7 +8,8 @@
 
 using namespace std;
 
-
+// Maximum allowed duration
+chrono::milliseconds max_duration = chrono::milliseconds(95);
 
 int randomIntRange(int min, int max){
     random_device rseed;
@@ -59,24 +60,17 @@ namespace std
 }
 
 
+vector<vector<Point*>> points;
+int width = 30, height = 20;
+
 class Board{
-    static vector<vector<Point*>> points;
-    static int width, height;
     unordered_set<Point*> blocked;
 
     public:
-    Board(int _width, int _height){
-        width = _width;
-        height = _height;
+    Board(){}
 
-        for(int x = 0; x < width; x++){
-            vector<Point*> yVector;
-            for(int y = 0; y < height; y++){
-                Point* p = new Point(x, y);
-                yVector.push_back(p);
-            }
-            points.push_back(yVector);
-        }
+    Board(unordered_set<Point*> _blocked){
+        blocked = _blocked;
     }
 
     void setBlocked(Point* p){
@@ -103,24 +97,36 @@ class Board{
         Point* left = getPoint(x-1, y);
         Point* right = getPoint(x+1, y);
 
-        if(top != nullptr && !isBlocked(top)){
+        if(top != nullptr){
             neighbors.push_back(top);
         }
 
-        if(bottom != nullptr && !isBlocked(bottom)){
+        if(bottom != nullptr){
             neighbors.push_back(bottom);
         }
 
-        if(left != nullptr && !isBlocked(left)){
+        if(left != nullptr){
             neighbors.push_back(left);
         }
 
-        if(right != nullptr && !isBlocked(right)){
+        if(right != nullptr){
             neighbors.push_back(right);
         }
 
         return neighbors;
     }
+
+    vector<Point*> validNeighbors(int x, int y){
+        vector<Point*> valid;
+        for(Point* p : getNeighbors(x, y)){
+            if( !isBlocked(p) ){
+                valid.push_back(p);
+            }
+        }
+
+        return valid;
+    }
+
 };
 
 
@@ -134,7 +140,8 @@ class Player{
     Player(){}
 
     Point* getRandomMove(Board& board){
-        vector<Point*> possibleMoves = board.getNeighbors(position->getX(), position->getY());
+        vector<Point*> possibleMoves = board.validNeighbors(position->getX(), position->getY());
+
         if( !possibleMoves.empty()  ){
             return possibleMoves.at((unsigned int) randomIntRange(0, possibleMoves.size() - 1));
         }else{
@@ -148,17 +155,22 @@ class Player{
 };
 
 
+double biasParameter = sqrt(2);
+
 class ActionTree {
     public:
-    static double biasParameter;
     Point* move;
     vector<ActionTree*> children;
-    ActionTree* parent;
-    int wins, plays;
+    ActionTree* parent = nullptr;
+    int wins = 0, plays = 0;
     bool winningMove;
 
-    ActionTree(Point* _move){
+    ActionTree(Point* _move, ActionTree* _parent){
         move = _move;
+        wins = 0;
+        plays = 0;
+        winningMove = false;
+        parent = _parent;
     }
 
     void win(){
@@ -170,10 +182,6 @@ class ActionTree {
         }
     }
 
-    bool isLeaf(){
-        return plays > 0 && children.empty();
-    }
-
     void loss(){
         plays += 1;
 
@@ -183,26 +191,32 @@ class ActionTree {
     }
 
     double ubcScore(){
-        double winPercentage = wins / plays;
-        double exploration = 0;
-        if( parent != nullptr ){
-            exploration = biasParameter * sqrt( (log(parent->plays / plays)) );
-        }
+        double winPercentage = 0, exploration = 0;
+        // Avoid division by zero
 
+        if (plays != 0){
+            winPercentage = wins / plays;
+
+            if( parent != nullptr ){
+                exploration = biasParameter * sqrt( (log(parent->plays / plays)) );
+            }
+        }
         return winPercentage + exploration;
     }
 
 
     /* Get the best child based ubc score: higher is better */
-    ActionTree* getOptimalChild(){
+    ActionTree* getOptimalChild(Board& board){
         ActionTree* bestChild = nullptr;
-        double bestScore = 0;
+        double bestScore = -INFINITY;
 
         for(ActionTree* child : children){
-            double ubcScore = child->ubcScore();
-            if( bestScore < ubcScore){
-                bestScore = ubcScore;
-                bestChild = child;
+            if( !board.isBlocked(child->move) ){
+                double ubcScore = child->ubcScore();
+                if( bestScore < ubcScore){
+                    bestScore = ubcScore;
+                    bestChild = child;
+                }
             }
         }
 
@@ -211,13 +225,15 @@ class ActionTree {
 
     ActionTree* getWinRatioChild(){
         ActionTree* bestChild = nullptr;
-        double bestScore = 0;
+        double bestScore = -INFINITY;
 
         for(ActionTree* child : children){
-            double score = child->wins / child->plays;
-            if( bestScore < score){
-                bestScore = score;
-                bestChild = child;
+            if( child->plays > 0 ){
+                double score = child->wins / child->plays;
+                if( bestScore < score){
+                    bestScore = score;
+                    bestChild = child;
+                }
             }
         }
 
@@ -263,30 +279,41 @@ class MCTS {
     }
 
     public:
-    // Maximum allowed duration
-    static chrono::milliseconds max_duration;
-
     MCTS(){
 
     };
 
     Point* getBestChoice(Board board, vector<Player> enemies, Player player){
-        rootNode = new ActionTree(player.position);
+        rootNode = new ActionTree(player.position, nullptr);
 
 
-        // Init the clock
-        chrono::time_point<std::chrono::system_clock> start;
-        start = chrono::system_clock::now();
+        auto begin = std::chrono::steady_clock::now();
+        int timediff =  int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());
 
 
-        while ( (chrono::system_clock::now()-start) < max_duration ) {
+
+        //RESETLOOP:while ( int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < 95 ) {
+        int count = 0;
+        RESETLOOP:while ( count++ < 1500) {
             // Start from the rootnode
             ActionTree* currentNode = rootNode;
-            Board currentBoard = Board(1, 1);
+            Board currentBoard = Board(board);
             vector<Player> currentEnemies;
             Player currentPlayer;
 
-            while( !currentNode->isLeaf() ){
+            while( true ){
+                for(Player e: currentEnemies){
+                    Point* newPosition = e.getRandomMove(board);
+                    e.position = newPosition;
+
+                    // They have lost
+                    if( newPosition == nullptr){
+                        currentNode->win();
+                        goto RESETLOOP;
+                    }else{
+                        currentBoard.setBlocked(newPosition);
+                    }
+                }
 
                 // The node has not been visited before, get neighbors as children
                 if( currentNode->plays == 0 ){
@@ -294,7 +321,7 @@ class MCTS {
                     vector<ActionTree*> children = {};
                     // Loop through and add children
                     for(Point* p: currentBoard.getNeighbors(currentNode->move->getX(), currentNode->move->getY())){
-                        children.push_back(new ActionTree(p));
+                        children.push_back(new ActionTree(p, currentNode));
                     }
 
                     // Add the children to the node
@@ -308,30 +335,31 @@ class MCTS {
                     }
 
                     // Start again from rootnode
-                    break;
+                    goto RESETLOOP;
 
                     // The node has been visited before
                 }else{
-                    currentNode = currentNode->getOptimalChild();
-
+                    ActionTree* bestChild = currentNode->getOptimalChild(currentBoard);
+                    // if the best child is nullptr, we have lost
+                    if( bestChild == nullptr ){
+                        currentNode->loss();
+                        goto RESETLOOP;
+                    }else{
+                        currentNode = bestChild;
+                        currentBoard.setBlocked(currentNode->move);
+                    }
                 }
             }
-
-            if ( currentNode->isLeaf() ){
-                // Is the current node a winning leaf?
-                if( currentNode->winningMove ){
-                    currentNode->win();
-                    // The current move is a loosing move
-                }else{
-                    currentNode->loss();
-                }
-            }
-
         }
 
         ActionTree* bestChild = rootNode->getWinRatioChild();
 
-        return bestChild->move;
+        // We cant do anything, do something just to end the turn
+        if ( bestChild == nullptr){
+            return board.getPoint(0, 0);
+        }else{
+            return bestChild->move;
+        }
 
     };
 
@@ -342,10 +370,18 @@ class MCTS {
 
 
 int main() {
-    ActionTree::biasParameter = sqrt(2);
-    MCTS::max_duration = chrono::milliseconds(98);
+    for(int x = 0; x < width; x++){
+        vector<Point*> yVector;
+        for(int y = 0; y < height; y++){
+            Point* p = new Point(x, y);
+            yVector.push_back(p);
+        }
+        points.push_back(yVector);
+    }
+
+
     MCTS mcts = MCTS();
-    Board board = Board(30, 20);
+    Board board = Board();
 
     Player enemy =  Player(board.getPoint(10, 10));
     vector<Player> enemies = { enemy };
@@ -355,10 +391,10 @@ int main() {
     board.setBlocked(enemy.position);
 
 
-    mcts.getBestChoice(board, enemies, player);
 
 
+    Point* result = mcts.getBestChoice(board, enemies, player);
+    cout << "The best move is: (" << result->getX() << ", " << result->getY() << ")" << std::endl;
 
-    std::cout << "Hello, World! 2" << std::endl;
     return 0;
 }
