@@ -10,7 +10,10 @@
 using namespace std;
 
 // Maximum allowed duration
-chrono::milliseconds max_duration = chrono::milliseconds(95);
+int maxDuration = 98;
+int heuristicConstant = 1;
+double biasParameter = 1 / sqrt(2);
+
 random_device rseed;
 mt19937 rgen(rseed()); // mersenne_twister
 
@@ -19,6 +22,26 @@ int randomIntRange(int min, int max){
     uniform_int_distribution<int> idist(min, max);
     return idist(rgen);
 }
+
+
+/**
+ * Using a domain specific heuristic that should help the algorithm choose a better path
+ * This will primarily be used for simulating moves for the evemies so that they dont loose as easily in the simulations
+ * @param enemies
+ * @param player
+ * @return
+ */
+/*
+double domainHeuristic(vector<Player>& enemies, Player& player){
+    double heuristic = 0;
+
+    for(Player e: enemies){
+        heuristic += abs(e.position->getX() - player.position->getX()) + abs(e.position->getY() - player.position->getY());
+    }
+
+    return heuristic;
+}
+ */
 
 class Point {
     int x, y;
@@ -72,7 +95,7 @@ class Board{
     Board(){}
 
     Board(unordered_set<Point*> _blocked){
-        blocked = _blocked;
+        blocked = unordered_set<Point*>(_blocked);
     }
 
     void setBlocked(Point* p){
@@ -154,11 +177,21 @@ class Player{
     }
 
 
+    Point* getSemiRandomMove(Board& board){
+        vector<Point*> possibleMoves = board.validNeighbors(position->getX(), position->getY());
 
+        if( !possibleMoves.empty()  ){
+
+            int randomPos = (unsigned int) randomIntRange(1, possibleMoves.size()) - 1;
+            return possibleMoves.at(randomPos);
+        }else{
+            // If the enemy cant return a valid choice it has lost
+            return nullptr;
+        }
+    }
 };
 
 
-double biasParameter = sqrt(2);
 
 class ActionTree {
     public:
@@ -193,7 +226,28 @@ class ActionTree {
         }
     }
 
-    double ubcScore(){
+    double getVariance(){
+        int totalWins = 0;
+        int total = 0;
+        int rewardSquared = 0;
+
+        if( parent != nullptr){
+            for(ActionTree* child : parent->children){
+                total += child->plays;
+                totalWins += child->wins;
+
+                rewardSquared += pow(child->wins/child->plays, 2);
+            }
+        }
+
+        if( total > 0 ){
+            return rewardSquared - pow(totalWins/total, 2);
+        }else {
+            return 0;
+        }
+    }
+
+    double ubc1TunedScore(){
         double winPercentage = 0, exploration = 0;
         // Avoid division by zero
 
@@ -201,9 +255,16 @@ class ActionTree {
             winPercentage = wins / plays;
 
             if( parent != nullptr ){
-                exploration = biasParameter * sqrt( (log(parent->plays) / plays) );
+                // exploration = 2 * biasParameter * sqrt( 2*log(parent->plays) / plays );
+
+                exploration = sqrt(  (log(parent->plays) / plays) *
+                                     min(0.25,
+                                     (getVariance() + sqrt(2 * log(parent->plays) / plays)  )));
             }
         }
+
+        // +        return avg_payoff + math.sqrt(math.log(number_sampled) / sampled_arm.total) * min(MAX_BERNOULLI_RANDOM_VARIABLE_VARIANCE, variance + math.sqrt(2.0 * math.log(number_sampled) / sampled_arm.total))
+
         return winPercentage + exploration;
     }
 
@@ -215,7 +276,7 @@ class ActionTree {
 
         for(ActionTree* child : children){
             if( !board.isBlocked(child->move) ){
-                double ubcScore = child->ubcScore();
+                double ubcScore = child->ubc1TunedScore();
                 if( bestScore < ubcScore){
                     bestScore = ubcScore;
                     bestChild = child;
@@ -226,17 +287,15 @@ class ActionTree {
         return bestChild;
     }
 
-    ActionTree* getWinRatioChild(){
+    ActionTree* getFinalChoiceChild(){
         ActionTree* bestChild = nullptr;
         double bestScore = -INFINITY;
 
         for(ActionTree* child : children){
-            if( child->plays > 0 ){
-                double score = child->wins / child->plays;
-                if( bestScore < score){
-                    bestScore = score;
-                    bestChild = child;
-                }
+            double score = child->plays;
+            if( bestScore < score){
+                bestScore = score;
+                bestChild = child;
             }
         }
 
@@ -289,17 +348,18 @@ class MCTS {
 
     public:
     MCTS(){
-
+        rootNode = nullptr;
     };
 
     Point* getBestChoice(Board board, vector<Player> enemies, Player player){
-        rootNode = new ActionTree(player.position, nullptr);
-
+        if( rootNode == nullptr){
+            rootNode = new ActionTree(player.position, nullptr);
+        }
 
         auto begin = std::chrono::steady_clock::now();
-        RESETLOOP:while ( int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < 95 ) {
+        RESETLOOP:while ( int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < maxDuration ) {
         //int count = 0;
-        //RESETLOOP:while ( count++ < 1500) {
+        //RESETLOOP:while ( count++ < 150000) {
             // Start from the rootnode
             ActionTree* currentNode = rootNode;
             Board currentBoard = Board(board);
@@ -359,13 +419,15 @@ class MCTS {
             }
         }
 
-        ActionTree* bestChild = rootNode->getWinRatioChild();
+        // Continue using the branch that we choose -> more simulations will lead to
+        // better result and this will lead to more and more simulations as the game progress.
 
+        rootNode = rootNode->getFinalChoiceChild();
         // We cant do anything, do something just to end the turn
-        if ( bestChild == nullptr){
+        if ( rootNode == nullptr){
             return new Point(-1, -1);
         }else{
-            return bestChild->move;
+            return rootNode->move;
         }
 
     };
@@ -392,6 +454,8 @@ void gameLoop(Board& board, MCTS mcts){
     vector<Player> enemies;
     Player player;
 
+    // THE FRIST POSITION IS NOT MARKED AS BLOCKED
+
     // game loop
     while (1) {
         int N; // total number of players (2 to 4).
@@ -406,6 +470,11 @@ void gameLoop(Board& board, MCTS mcts){
 
             cin >> X0 >> Y0 >> X1 >> Y1; cin.ignore();
 
+
+            if( X0 != -1 && Y0 != -1 ){
+                board.setBlocked(board.getPoint(X0, X1));
+            }
+            board.setBlocked(board.getPoint(X1, Y1));
             // This player is me
             if(i == P && enemies.size() != N){
                 player = Player(board.getPoint(X1, Y1));
@@ -418,7 +487,6 @@ void gameLoop(Board& board, MCTS mcts){
                     enemies.at(i).position = board.getPoint(X1, Y1);
                 }
             }
-            board.setBlocked(board.getPoint(X1, Y1));
         }
 
         // Write an action using cout. DON'T FORGET THE "<< endl"
@@ -452,18 +520,11 @@ int main() {
     MCTS mcts = MCTS();
     Board board = Board();
 
-
-    gameLoop(board, mcts);
-
-
-
-
-
-
-
-
-
     /*
+    gameLoop(board, mcts);
+    */
+
+
 
     Player enemy =  Player(board.getPoint(10, 10));
     vector<Player> enemies = { enemy };
@@ -475,6 +536,6 @@ int main() {
     Point* result = mcts.getBestChoice(board, enemies, player);
     cout << "The best move is: (" << result->getX() << ", " << result->getY() << ")" << std::endl;
     cout << "Direction: " << getDirection(player.position, result) << " FROM (" << player.position->getX() << ", " << player.position->getY() << ") TO (" << result->getX() << ", " << result->getY() << ")" << std::endl;
-    */
+
     return 0;
 }
