@@ -13,6 +13,7 @@ using namespace std;
 int maxDuration = 98;
 int heuristicConstant = 1;
 double biasParameter = 1 / sqrt(2);
+bool TESTING = false;
 
 random_device rseed;
 mt19937 rgen(rseed()); // mersenne_twister
@@ -160,6 +161,10 @@ class Player{
     Point* position;
     Player(Point* pos){
         position = pos;
+    }
+
+    Player(const Player& p){
+        position = p.position;
     }
 
     Player(){}
@@ -351,7 +356,7 @@ class MCTS {
         rootNode = nullptr;
     };
 
-    Point* getBestChoice(Board board, vector<Player> enemies, Player player){
+    Point* getBestChoice(Board& board, vector<Player>& enemies, Player& player){
         if( rootNode == nullptr){
             rootNode = new ActionTree(player.position, nullptr);
         }
@@ -363,8 +368,8 @@ class MCTS {
             // Start from the rootnode
             ActionTree* currentNode = rootNode;
             Board currentBoard = Board(board);
-            vector<Player> currentEnemies;
-            Player currentPlayer;
+            vector<Player> currentEnemies = vector<Player>{enemies};
+            Player currentPlayer = Player(player);
 
             while( true ){
                 for(Player e: currentEnemies){
@@ -388,7 +393,7 @@ class MCTS {
                         ActionTree* childAction = new ActionTree(p, currentNode);
 
                         // check if this is a valid move
-                        if( simulateMove(p, currentBoard, enemies, player) ){
+                        if( simulateMove(p, currentBoard, currentEnemies, currentPlayer) ){
                             childAction->win();
                         }else {
                             childAction->loss();
@@ -414,6 +419,7 @@ class MCTS {
                     }else{
                         currentNode = bestChild;
                         currentBoard.setBlocked(currentNode->move);
+                        currentPlayer.position = bestChild->move;
                     }
                 }
             }
@@ -520,22 +526,23 @@ int main() {
     MCTS mcts = MCTS();
     Board board = Board();
 
-    /*
-    gameLoop(board, mcts);
-    */
+
+    if(TESTING){
+        Player enemy =  Player(board.getPoint(10, 10));
+        vector<Player> enemies = { enemy };
+        Player player = Player(board.getPoint(15, 15));
+
+        board.setBlocked(player.position);
+        board.setBlocked(enemy.position);
+
+        Point* result = mcts.getBestChoice(board, enemies, player);
+        cout << "The best move is: (" << result->getX() << ", " << result->getY() << ")" << std::endl;
+        cout << "Direction: " << getDirection(player.position, result) << " FROM (" << player.position->getX() << ", " << player.position->getY() << ") TO (" << result->getX() << ", " << result->getY() << ")" << std::endl;
+    }else{
+        gameLoop(board, mcts);
+    }
 
 
-
-    Player enemy =  Player(board.getPoint(10, 10));
-    vector<Player> enemies = { enemy };
-    Player player = Player(board.getPoint(15, 15));
-
-    board.setBlocked(player.position);
-    board.setBlocked(enemy.position);
-
-    Point* result = mcts.getBestChoice(board, enemies, player);
-    cout << "The best move is: (" << result->getX() << ", " << result->getY() << ")" << std::endl;
-    cout << "Direction: " << getDirection(player.position, result) << " FROM (" << player.position->getX() << ", " << player.position->getY() << ") TO (" << result->getX() << ", " << result->getY() << ")" << std::endl;
 
     return 0;
 }
