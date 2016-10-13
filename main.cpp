@@ -415,19 +415,6 @@ class MCTS {
             Player currentPlayer = Player(player);
 
             while( true ){
-                for(Player& e: currentEnemies){
-                    Point* newPosition = e.getRandomMove(currentBoard);
-                    e.position = newPosition;
-
-                    // They have lost
-                    if( newPosition == nullptr){
-                        currentNode->win();
-                        goto RESETLOOP;
-                    }else{
-                        currentBoard.setBlocked(newPosition);
-                    }
-                }
-
                 // The node has not been visited before, get neighbors as children
                 if( currentNode->plays < 2 ){
                     vector<ActionTree*> children = {};
@@ -454,6 +441,20 @@ class MCTS {
 
                     // The node has been visited before
                 }else{
+                    for(Player& e: currentEnemies){
+                        Point* newPosition = e.getRandomMove(currentBoard);
+                        e.position = newPosition;
+
+                        // They have lost
+                        if( newPosition == nullptr){
+                            currentNode->win();
+                            goto RESETLOOP;
+                        }else{
+                            currentBoard.setBlocked(newPosition);
+                        }
+                    }
+
+
                     ActionTree* bestChild = currentNode->getOptimalChild(currentBoard);
                     // if the best child is nullptr, we have lost
                     if( bestChild == nullptr ){
