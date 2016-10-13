@@ -24,26 +24,6 @@ int randomIntRange(int min, int max){
     return idist(rgen);
 }
 
-
-/**
- * Using a domain specific heuristic that should help the algorithm choose a better path
- * This will primarily be used for simulating moves for the evemies so that they dont loose as easily in the simulations
- * @param enemies
- * @param player
- * @return
- */
-/*
-double domainHeuristic(vector<Player>& enemies, Player& player){
-    double heuristic = 0;
-
-    for(Player e: enemies){
-        heuristic += abs(e.position->getX() - player.position->getX()) + abs(e.position->getY() - player.position->getY());
-    }
-
-    return heuristic;
-}
- */
-
 class Point {
     int x, y;
 
@@ -166,7 +146,7 @@ class Player{
     public:
     Point* position;
 
-    Player(Point* pos) : position(pos){}
+    explicit Player(Point* pos) : position(pos){}
 
     Player(const Player& p){
         position = p.position;
@@ -194,17 +174,51 @@ class Player{
         return this->position;
     }
 
-    Point* getSemiRandomMove(Board& board){
+    Point* getSemiRandomMove(Board& board, vector<Player>& enemies){
         vector<Point*> possibleMoves = board.validNeighbors(position->getX(), position->getY());
 
-        if( !possibleMoves.empty()  ){
+        Point* bestMove = nullptr;
+        double bestScore = numeric_limits<double>::max();
 
-            int randomPos = (unsigned int) randomIntRange(1, possibleMoves.size()) - 1;
-            return possibleMoves.at(randomPos);
+        for(Point* move: possibleMoves){
+            double currentScore = domainHeuristic(enemies, move);
+
+            if( bestScore > currentScore ){
+                bestScore = currentScore;
+                bestMove = move;
+            }
+        }
+
+
+        if( !possibleMoves.empty()  ){
+            if( randomIntRange(1, 100) > 60 ){
+                return bestMove;
+            }else{
+                int randomPos = (unsigned int) randomIntRange(1, possibleMoves.size()) - 1;
+                return possibleMoves.at(randomPos);
+            }
         }else{
             // If the enemy cant return a valid choice it has lost
             return nullptr;
         }
+    }
+
+    /**
+    * Using a domain specific heuristic that should help the algorithm choose a better path
+    * This will primarily be used for simulating moves for the evemies so that they dont loose as easily in the simulations
+    * @param enemies
+    * @param player
+    * @return
+    */
+
+    double domainHeuristic(vector<Player>& enemies, Point*& playerPosition){
+        double heuristic = 0;
+
+        for(Player e: enemies){
+            heuristic += abs(e.position->getX() - playerPosition->getX()) + abs(e.position->getY() - playerPosition->getY());
+        }
+
+        return heuristic;
     }
 };
 
@@ -216,13 +230,11 @@ class ActionTree {
     vector<ActionTree*> children;
     ActionTree* parent = nullptr;
     float wins = 0, plays = 0;
-    bool winningMove;
 
     ActionTree(Point* _move, ActionTree* _parent){
         move = _move;
         wins = 0;
         plays = 0;
-        winningMove = false;
         parent = _parent;
     }
 
@@ -347,12 +359,16 @@ class MCTS {
     }
 
     bool playSimulation(Board& board, vector<Player> enemies, Player player){
+        vector<Player> playerVector = {player};
+
+
         // Run until we are the only one standing
         while( !enemies.empty() ){
             // The enemies makes the first move
             for(Player& enemy : enemies){
                 // Make a random move
-                Point* move = enemy.getRandomMove(board);
+                //Point* move = enemy.getRandomMove(board);
+                Point* move = enemy.getSemiRandomMove(board, playerVector);
 
                 // Check if the move is a valid one i.e. not nullpointer
                 if ( move == nullptr ){
@@ -458,11 +474,11 @@ class MCTS {
         // better result and this will lead to more and more simulations as the game progress.
 
         rootNode = rootNode->getFinalChoiceChild();
-        rootNode->parent = nullptr;
         // We cant do anything, do something just to end the turn
         if ( rootNode == nullptr){
             return new Point(-1, -1);
         }else{
+            rootNode->parent = nullptr;
             return rootNode->move;
         }
 
@@ -508,7 +524,7 @@ void gameLoop(Board& board, MCTS& mcts){
 
 
             if( X0 != -1 && Y0 != -1 ){
-                board.setBlocked(board.getPoint(X0, X1));
+                board.setBlocked(board.getPoint(X0, Y0));
             }
             board.setBlocked(board.getPoint(X1, Y1));
             // This player is me
