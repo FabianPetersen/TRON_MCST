@@ -18,6 +18,10 @@ bool TESTING = true;
 random_device rseed;
 mt19937 rgen(rseed()); // mersenne_twister
 
+class Player;
+class Point;
+class Board;
+double domainHeuristic(vector<Player>& enemies, Point*& playerPosition);
 
 int randomIntRange(int min, int max){
     uniform_int_distribution<int> idist(min, max);
@@ -166,14 +170,6 @@ class Player{
         }
     }
 
-    void setPosition(Point* p){
-        this->position = p;
-    }
-
-    Point* getPosition(){
-        return this->position;
-    }
-
     Point* getSemiRandomMove(Board& board, vector<Player>& enemies){
         vector<Point*> possibleMoves = board.validNeighbors(position->getX(), position->getY());
 
@@ -202,26 +198,24 @@ class Player{
             return nullptr;
         }
     }
-
-    /**
-    * Using a domain specific heuristic that should help the algorithm choose a better path
-    * This will primarily be used for simulating moves for the evemies so that they dont loose as easily in the simulations
-    * @param enemies
-    * @param player
-    * @return
-    */
-
-    double domainHeuristic(vector<Player>& enemies, Point*& playerPosition){
-        double heuristic = 0;
-
-        for(Player e: enemies){
-            heuristic += abs(e.position->getX() - playerPosition->getX()) + abs(e.position->getY() - playerPosition->getY());
-        }
-
-        return heuristic;
-    }
 };
 
+/**
+* Using a domain specific heuristic that should help the algorithm choose a better path
+* This will primarily be used for simulating moves for the evemies so that they dont loose as easily in the simulations
+* @param enemies
+* @param player
+* @return
+*/
+double domainHeuristic(vector<Player>& enemies, Point*& playerPosition){
+    double heuristic = 0;
+
+    for(Player e: enemies){
+        heuristic += abs(e.position->getX() - playerPosition->getX()) + abs(e.position->getY() - playerPosition->getY());
+    }
+
+    return heuristic;
+}
 
 
 class ActionTree {
@@ -283,36 +277,36 @@ class ActionTree {
         }
     }
 
-    double ubc1TunedScore(){
-        double winPercentage = 0, exploration = 0;
-        // Avoid division by zero
+    /**
+     * The algorithm that is used to calculate the best child
+     * @return
+     */
+    double ubc1TunedScore(vector<Player>& enemies){
+        double winPercentage = 0, exploration = 0, domain = 0;
 
+        // Avoid division by zero
         if (plays != 0){
             winPercentage = wins / plays;
 
             if( parent != nullptr ){
-                 exploration = 2 * biasParameter * sqrt( 2*log(parent->plays) / plays );
-
-                //exploration = sqrt(  (log(parent->plays) / plays) *
-                //                     min(0.25,
-                //                     (getVariance() + sqrt(2 * log(parent->plays) / plays)  )));
+                 exploration = 2 * biasParameter * sqrt( 2*log(parent->plays) / plays ) ;
             }
         }
+        // Domain specific heuristic
+        domain = domainHeuristic(enemies, move) / (1 + plays);
 
-        // +        return avg_payoff + math.sqrt(math.log(number_sampled) / sampled_arm.total) * min(MAX_BERNOULLI_RANDOM_VARIABLE_VARIANCE, variance + math.sqrt(2.0 * math.log(number_sampled) / sampled_arm.total))
-
-        return winPercentage + exploration;
+        return winPercentage + exploration + domain;
     }
 
 
     /* Get the best child based ubc score: higher is better */
-    ActionTree* getOptimalChild(Board& board){
+    ActionTree* getOptimalChild(Board& board, vector<Player>& enemies){
         ActionTree* bestChild = nullptr;
         double bestScore = -INFINITY;
 
         for(ActionTree*& child : children){
             if( !board.isBlocked(child->move) ){
-                double ubcScore = child->ubc1TunedScore();
+                double ubcScore = child->ubc1TunedScore(enemies);
                 if( bestScore < ubcScore){
                     bestScore = ubcScore;
                     bestChild = child;
@@ -332,7 +326,7 @@ class ActionTree {
 
         for(ActionTree*& child : children){
             if( child->plays > 0 ){
-                double score = child->wins / child->plays;
+                double score = child->plays;
                 if( bestScore < score){
                     bestScore = score;
                     bestChild = child;
@@ -404,10 +398,7 @@ class MCTS {
 
         int count = 0;
         auto begin = std::chrono::steady_clock::now();
-        //RESETLOOP:while ( int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < maxDuration ) {
-
-            count++;
-        RESETLOOP:while ( count++ < 150) {
+        RESETLOOP:while ( (TESTING && count++ < 150) || int(chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count()) < maxDuration ) {
             // Start from the rootnode
             ActionTree* currentNode = rootNode;
             Board currentBoard = Board(board);
@@ -455,7 +446,7 @@ class MCTS {
                     }
 
 
-                    ActionTree* bestChild = currentNode->getOptimalChild(currentBoard);
+                    ActionTree* bestChild = currentNode->getOptimalChild(currentBoard, currentEnemies);
                     // if the best child is nullptr, we have lost
                     if( bestChild == nullptr ){
                         currentNode->loss();
